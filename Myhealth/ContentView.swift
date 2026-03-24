@@ -1,21 +1,39 @@
-//
-//  ContentView.swift
-//  Myhealth
-//
-//  Created by ximapika on 2026/3/19.
-//
-
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var dataStore = DataStore.shared
+    @StateObject private var healthKit = HealthKitManager.shared
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        TabView {
+            DashboardView()
+                .tabItem {
+                    Label("Today", systemImage: "flame.fill")
+                }
+
+            MealView()
+                .tabItem {
+                    Label("Meals", systemImage: "fork.knife")
+                }
+
+            HistoryView()
+                .tabItem {
+                    Label("History", systemImage: "chart.bar.fill")
+                }
+
+            ReportView()
+                .tabItem {
+                    Label("Reports", systemImage: "doc.text.fill")
+                }
+
+            SettingsView()
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape.fill")
+                }
         }
-        .padding()
+        .task {
+            await healthKit.requestAuthorization()
+        }
     }
 }
 
