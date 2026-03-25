@@ -11,7 +11,9 @@ class DataStore: ObservableObject {
         static let weights = "weights_v1"
         static let energies = "energies_v1"
         static let reports = "reports_v1"
-        static let apiKey = "anthropic_api_key"
+        static let modelConfigs = "ai_model_configs_v1"
+        static let selectedModelID = "ai_selected_model_id"
+        static let legacyAPIKey = "anthropic_api_key"
     }
 
     // MARK: - Published
@@ -20,12 +22,22 @@ class DataStore: ObservableObject {
     @Published var weights: [WeightRecord] = []
     @Published var energies: [DailyEnergy] = []
     @Published var reports: [Report] = []
+    @Published var modelConfigs: [AIModelConfig] = []
 
-    // API key stored in UserDefaults (for simplicity; Keychain preferred in production)
-    var apiKey: String {
-        get { UserDefaults.standard.string(forKey: Key.apiKey) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.apiKey) }
+    var selectedModelID: String? {
+        get { UserDefaults.standard.string(forKey: Key.selectedModelID) }
+        set { UserDefaults.standard.set(newValue, forKey: Key.selectedModelID) }
     }
+
+    var selectedModel: AIModelConfig? {
+        if let idStr = selectedModelID, let uuid = UUID(uuidString: idStr) {
+            return modelConfigs.first { $0.id == uuid }
+        }
+        return modelConfigs.first
+    }
+
+    // Legacy compatibility
+    var apiKey: String { selectedModel?.apiKey ?? "" }
 
     private init() {
         load()
@@ -38,6 +50,33 @@ class DataStore: ObservableObject {
         weights = decode([WeightRecord].self, key: Key.weights) ?? []
         energies = decode([DailyEnergy].self, key: Key.energies) ?? []
         reports = decode([Report].self, key: Key.reports) ?? []
+        modelConfigs = decode([AIModelConfig].self, key: Key.modelConfigs) ?? []
+
+        // Migrate legacy Anthropic API key on first launch
+        if modelConfigs.isEmpty {
+            let legacyKey = UserDefaults.standard.string(forKey: Key.legacyAPIKey) ?? ""
+            modelConfigs = [AIModelConfig.defaultAnthropic(apiKey: legacyKey)]
+            save(modelConfigs, key: Key.modelConfigs)
+        }
+    }
+
+    // MARK: - Model Configs
+
+    func upsertModelConfig(_ config: AIModelConfig) {
+        if let idx = modelConfigs.firstIndex(where: { $0.id == config.id }) {
+            modelConfigs[idx] = config
+        } else {
+            modelConfigs.append(config)
+        }
+        save(modelConfigs, key: Key.modelConfigs)
+    }
+
+    func deleteModelConfig(id: UUID) {
+        modelConfigs.removeAll { $0.id == id }
+        if selectedModelID == id.uuidString {
+            selectedModelID = modelConfigs.first?.id.uuidString
+        }
+        save(modelConfigs, key: Key.modelConfigs)
     }
 
     // MARK: - Meals

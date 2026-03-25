@@ -5,62 +5,31 @@ class AIService {
     static let shared = AIService()
     private init() {}
 
-    private let endpoint = "https://api.anthropic.com/v1/messages"
-
     // MARK: - Meal Analysis
 
     /// Analyze a meal photo and return estimated calories + description
-    func analyzeMeal(image: UIImage, mealType: MealType) async throws -> (calories: Double, description: String) {
-        let apiKey = DataStore.shared.apiKey
-        guard !apiKey.isEmpty else {
-            throw AIError.noAPIKey
+    func analyzeMeal(image: UIImage, mealLabel: String) async throws -> (calories: Double, description: String) {
+        let config = try activeConfig()
+        guard config.supportsVision else {
+            throw AIError.visionNotSupported(config.name)
         }
-
-        guard let imageData = image.jpegData(compressionQuality: 0.7) else {
-            throw AIError.imageProcessingFailed
-        }
-        let base64Image = imageData.base64EncodedString()
 
         let prompt = """
-        This is a photo of my \(mealType.rawValue.lowercased()).
+        This is a photo of my \(mealLabel.lowercased()).
         Please estimate the total calorie content (kcal) of all visible food items.
         Respond with a JSON object in this exact format:
         {"calories": <number>, "description": "<brief description of items and portions>"}
         Only respond with the JSON, no other text.
         """
 
-        let requestBody: [String: Any] = [
-            "model": "claude-opus-4-6",
-            "max_tokens": 300,
-            "messages": [
-                [
-                    "role": "user",
-                    "content": [
-                        [
-                            "type": "image",
-                            "source": [
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": base64Image
-                            ]
-                        ],
-                        [
-                            "type": "text",
-                            "text": prompt
-                        ]
-                    ]
-                ]
-            ]
-        ]
-
-        let responseText = try await sendRequest(body: requestBody, apiKey: apiKey)
+        let requestBody = try buildVisionRequest(image: image, prompt: prompt, config: config)
+        let responseText = try await sendRequest(body: requestBody, config: config)
 
         // Parse JSON response
         guard let data = responseText.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let calories = json["calories"] as? Double,
               let description = json["description"] as? String else {
-            // Try to extract number if JSON parsing fails
             if let calories = extractCalories(from: responseText) {
                 return (calories, responseText)
             }
@@ -73,8 +42,7 @@ class AIService {
     // MARK: - Daily Report
 
     func generateDailyReport(summary: DailySummary) async throws -> String {
-        let apiKey = DataStore.shared.apiKey
-        guard !apiKey.isEmpty else { throw AIError.noAPIKey }
+        let config = try activeConfig()
 
         let dateStr = DateFormatter.display.string(from: summary.date)
         let mealLines = summary.meals.map { m in
@@ -96,14 +64,13 @@ class AIService {
         Write a friendly, motivating daily report (3-5 sentences) covering energy balance, sleep quality, and any notable observations. Be specific with the numbers.
         """
 
-        return try await sendRequest(body: buildTextRequest(prompt: prompt), apiKey: apiKey)
+        return try await sendRequest(body: buildTextRequest(prompt: prompt, config: config), config: config)
     }
 
     // MARK: - Weekly Report
 
     func generateWeeklyReport(summaries: [DailySummary]) async throws -> String {
-        let apiKey = DataStore.shared.apiKey
-        guard !apiKey.isEmpty else { throw AIError.noAPIKey }
+        let config = try activeConfig()
 
         let lines = summaries.map { s in
             let d = DateFormatter.display.string(from: s.date)
@@ -124,27 +91,70 @@ class AIService {
         Please write a comprehensive weekly health report (5-8 sentences) covering: overall energy balance trend, sleep patterns, weight trend (if available), and personalized recommendations for next week.
         """
 
-        return try await sendRequest(body: buildTextRequest(prompt: prompt), apiKey: apiKey)
+        return try await sendRequest(body: buildTextRequest(prompt: prompt, config: config), config: config)
     }
 
     // MARK: - Private Helpers
 
-    private func buildTextRequest(prompt: String) -> [String: Any] {
-        [
-            "model": "claude-opus-4-6",
-            "max_tokens": 600,
-            "messages": [
-                ["role": "user", "content": prompt]
+    private func activeConfig() throws -> AIModelConfig {
+        guard let config = DataStore.shared.selectedModel, !config.apiKey.isEmpty else {
+            throw AIError.noAPIKey
+        }
+        return config
+    }
+
+    private func buildVisionRequest(image: UIImage, prompt: String, config: AIModelConfig) throws -> [String: Any] {
+        guard let imageData = image.jpegData(compressionQuality: 0.7) else {
+            throw AIError.imageProcessingFailed
+        }
+        let base64Image = imageData.base64EncodedString()
+
+        let content: [[String: Any]]
+        switch config.provider {
+        case .anthropic:
+            content = [
+                ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": base64Image]],
+                ["type": "text", "text": prompt]
             ]
+        case .openaiCompatible:
+            content = [
+                ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(base64Image)"]],
+                ["type": "text", "text": prompt]
+            ]
+        }
+
+        return [
+            "model": config.modelID,
+            "max_tokens": 300,
+            "messages": [["role": "user", "content": content]]
         ]
     }
 
-    private func sendRequest(body: [String: Any], apiKey: String) async throws -> String {
-        var request = URLRequest(url: URL(string: endpoint)!)
+    private func buildTextRequest(prompt: String, config: AIModelConfig) -> [String: Any] {
+        [
+            "model": config.modelID,
+            "max_tokens": 600,
+            "messages": [["role": "user", "content": prompt]]
+        ]
+    }
+
+    private func sendRequest(body: [String: Any], config: AIModelConfig) async throws -> String {
+        guard let url = URL(string: config.apiURL) else {
+            throw AIError.networkError("Invalid URL: \(config.apiURL)")
+        }
+
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+
+        switch config.provider {
+        case .anthropic:
+            request.setValue(config.apiKey, forHTTPHeaderField: "x-api-key")
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        case .openaiCompatible:
+            request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        }
+
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -152,20 +162,36 @@ class AIService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AIError.networkError("Invalid response")
         }
-
         guard httpResponse.statusCode == 200 else {
             let body = String(data: data, encoding: .utf8) ?? "unknown"
             throw AIError.networkError("HTTP \(httpResponse.statusCode): \(body)")
         }
 
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = json["content"] as? [[String: Any]],
-              let first = content.first,
-              let text = first["text"] as? String else {
-            throw AIError.parseError("Could not parse API response")
+        return try parseResponse(data: data, provider: config.provider)
+    }
+
+    private func parseResponse(data: Data, provider: AIProvider) throws -> String {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AIError.parseError("Invalid JSON response")
         }
 
-        return text
+        switch provider {
+        case .anthropic:
+            guard let content = json["content"] as? [[String: Any]],
+                  let first = content.first,
+                  let text = first["text"] as? String else {
+                throw AIError.parseError("Could not parse Anthropic response")
+            }
+            return text
+        case .openaiCompatible:
+            guard let choices = json["choices"] as? [[String: Any]],
+                  let first = choices.first,
+                  let message = first["message"] as? [String: Any],
+                  let content = message["content"] as? String else {
+                throw AIError.parseError("Could not parse OpenAI-compatible response")
+            }
+            return content
+        }
     }
 
     private func extractCalories(from text: String) -> Double? {
@@ -183,13 +209,15 @@ class AIService {
 enum AIError: LocalizedError {
     case noAPIKey
     case imageProcessingFailed
+    case visionNotSupported(String)
     case networkError(String)
     case parseError(String)
 
     var errorDescription: String? {
         switch self {
-        case .noAPIKey: return "Please add your Anthropic API key in Settings."
+        case .noAPIKey: return "Please add an API key in Settings → AI Models."
         case .imageProcessingFailed: return "Failed to process the image."
+        case .visionNotSupported(let name): return "\"\(name)\" does not support image analysis. Select a vision-capable model in Settings."
         case .networkError(let msg): return "Network error: \(msg)"
         case .parseError(let msg): return "Could not parse AI response: \(msg)"
         }
