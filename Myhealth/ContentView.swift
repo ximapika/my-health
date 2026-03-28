@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var dataStore = DataStore.shared
     @StateObject private var healthKit = HealthKitManager.shared
 
     var body: some View {
@@ -9,11 +8,6 @@ struct ContentView: View {
             DashboardView()
                 .tabItem {
                     Label("Today", systemImage: "flame.fill")
-                }
-
-            MealView()
-                .tabItem {
-                    Label("Meals", systemImage: "fork.knife")
                 }
 
             HistoryView()

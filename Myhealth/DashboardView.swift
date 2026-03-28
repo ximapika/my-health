@@ -4,20 +4,36 @@ struct DashboardView: View {
     @StateObject private var store = DataStore.shared
     @StateObject private var healthKit = HealthKitManager.shared
     @State private var isRefreshing = false
+    @State private var selectedDate = Calendar.current.startOfDay(for: Date())
+    @State private var activeRefreshID = UUID()
 
-    private var today: Date { Calendar.current.startOfDay(for: Date()) }
-    private var summary: DailySummary { store.dailySummary(for: today) }
+    private let calendar = Calendar.current
+
+    private var today: Date { calendar.startOfDay(for: Date()) }
+    private var summary: DailySummary { store.dailySummary(for: selectedDate) }
+
+    private var selectedDateBinding: Binding<Date> {
+        Binding(
+            get: { selectedDate },
+            set: { newValue in
+                selectedDate = min(calendar.startOfDay(for: newValue), today)
+            }
+        )
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    // Date header
-                    Text(DateFormatter.display.string(from: Date()))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal)
+                    DateSelectorCard(
+                        selectedDate: selectedDateBinding,
+                        today: today,
+                        isRefreshing: isRefreshing,
+                        onPreviousDay: { shiftSelectedDate(by: -1) },
+                        onNextDay: { shiftSelectedDate(by: 1) },
+                        onJumpToToday: { selectedDate = today }
+                    )
+                    .padding(.horizontal)
 
                     // Energy ring card
                     EnergyRingCard(summary: summary)
@@ -56,16 +72,20 @@ struct DashboardView: View {
                     }
                     .padding(.horizontal)
 
-                    // Meals intake row
-                    MealSummaryRow(meals: summary.meals)
-                        .padding(.horizontal)
+                    NavigationLink {
+                        MealView(selectedDate: selectedDateBinding)
+                    } label: {
+                        MealSummaryRow(date: selectedDate, meals: summary.meals)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal)
 
                     // Net energy
                     NetEnergyCard(net: summary.netEnergy, intake: summary.totalIntake, burned: summary.totalBurned)
                         .padding(.horizontal)
 
                     // Weight input
-                    WeightInputCard(today: today)
+                    WeightInputCard(date: selectedDate)
                         .padding(.horizontal)
 
                     Spacer(minLength: 20)
@@ -77,7 +97,7 @@ struct DashboardView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        Task { await refresh() }
+                        Task { await refresh(for: selectedDate) }
                     } label: {
                         if isRefreshing {
                             ProgressView().scaleEffect(0.8)
@@ -87,15 +107,94 @@ struct DashboardView: View {
                     }
                 }
             }
-            .task { await refresh() }
+            .task(id: selectedDate) { await refresh(for: selectedDate) }
         }
     }
 
-    private func refresh() async {
+    private func shiftSelectedDate(by days: Int) {
+        guard let shifted = calendar.date(byAdding: .day, value: days, to: selectedDate) else { return }
+        selectedDate = min(calendar.startOfDay(for: shifted), today)
+    }
+
+    private func refresh(for date: Date) async {
+        let requestID = UUID()
+        activeRefreshID = requestID
         isRefreshing = true
-        let energy = await healthKit.fetchDailyEnergy(for: today)
+
+        let targetDate = calendar.startOfDay(for: date)
+        let energy = await healthKit.fetchDailyEnergy(for: targetDate)
         store.upsertEnergy(energy)
+
+        guard activeRefreshID == requestID else { return }
         isRefreshing = false
+    }
+}
+
+struct DateSelectorCard: View {
+    @Binding var selectedDate: Date
+    let today: Date
+    let isRefreshing: Bool
+    let onPreviousDay: () -> Void
+    let onNextDay: () -> Void
+    let onJumpToToday: () -> Void
+
+    private let calendar = Calendar.current
+
+    private var isShowingToday: Bool {
+        calendar.isDate(selectedDate, inSameDayAs: today)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Date")
+                        .font(.headline)
+                    Text(isShowingToday ? "Today" : DateFormatter.display.string(from: selectedDate))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if !isShowingToday {
+                    Button("Today", action: onJumpToToday)
+                        .font(.subheadline.weight(.semibold))
+                }
+            }
+
+            HStack(spacing: 12) {
+                Button(action: onPreviousDay) {
+                    Image(systemName: "chevron.left")
+                        .font(.headline)
+                        .frame(width: 36, height: 36)
+                        .background(Color(.systemFill), in: Circle())
+                }
+                .buttonStyle(.plain)
+
+                DatePicker("Date", selection: $selectedDate, in: ...today, displayedComponents: .date)
+                    .datePickerStyle(.compact)
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if isRefreshing {
+                    ProgressView()
+                        .scaleEffect(0.85)
+                }
+
+                Button(action: onNextDay) {
+                    Image(systemName: "chevron.right")
+                        .font(.headline)
+                        .frame(width: 36, height: 36)
+                        .background(Color(.systemFill), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isShowingToday)
+                .opacity(isShowingToday ? 0.35 : 1)
+            }
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
     }
 }
 
@@ -196,12 +295,26 @@ struct StatCard: View {
 // MARK: - Meal Summary Row
 
 struct MealSummaryRow: View {
+    let date: Date
     let meals: [MealRecord]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Meals Today")
-                .font(.headline)
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Meals")
+                        .font(.headline)
+                    Text(DateFormatter.display.string(from: date))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
 
             HStack(spacing: 12) {
                 ForEach(MealType.allCases, id: \.self) { type in
@@ -279,12 +392,12 @@ struct NetEnergyCard: View {
 // MARK: - Weight Input Card
 
 struct WeightInputCard: View {
-    let today: Date
+    let date: Date
     @StateObject private var store = DataStore.shared
     @State private var weightText = ""
     @State private var showInput = false
 
-    var currentWeight: WeightRecord? { store.weight(for: today) }
+    var currentWeight: WeightRecord? { store.weight(for: date) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -308,7 +421,7 @@ struct WeightInputCard: View {
                         .textFieldStyle(.roundedBorder)
                     Button("Save") {
                         if let kg = Double(weightText), kg > 0 {
-                            store.upsertWeight(WeightRecord(date: today, kg: kg))
+                            store.upsertWeight(WeightRecord(date: date, kg: kg))
                             showInput = false
                         }
                     }

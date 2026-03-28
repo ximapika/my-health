@@ -5,51 +5,61 @@ import PhotosUI
 
 struct MealView: View {
     @StateObject private var store = DataStore.shared
-    @State private var selectedDate = Calendar.current.startOfDay(for: Date())
+    @Binding var selectedDate: Date
     @State private var showAddCustomMeal = false
+
+    private let calendar = Calendar.current
+
+    private var today: Date { calendar.startOfDay(for: Date()) }
+    private var selectedDateBinding: Binding<Date> {
+        Binding(
+            get: { selectedDate },
+            set: { newValue in
+                selectedDate = min(calendar.startOfDay(for: newValue), today)
+            }
+        )
+    }
 
     private var customMeals: [MealRecord] {
         store.meals(for: selectedDate).filter { $0.type == .custom }
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 16) {
-                    DatePicker("Date", selection: $selectedDate, displayedComponents: .date)
-                        .datePickerStyle(.compact)
-                        .padding(.horizontal)
-
-                    // Standard meals
-                    ForEach(MealType.standardCases, id: \.self) { type in
-                        MealCard(date: selectedDate, mealType: type)
-                            .padding(.horizontal)
-                    }
-
-                    // Custom meals
-                    ForEach(customMeals) { meal in
-                        MealCard(date: selectedDate, mealType: .custom, mealID: meal.id)
-                            .padding(.horizontal)
-                    }
-
-                    Button {
-                        showAddCustomMeal = true
-                    } label: {
-                        Label("Add Custom Meal", systemImage: "plus.circle.fill")
-                            .font(.subheadline)
-                    }
-                    .buttonStyle(.bordered)
+        ScrollView {
+            VStack(spacing: 16) {
+                DatePicker("Date", selection: selectedDateBinding, in: ...today, displayedComponents: .date)
+                    .datePickerStyle(.compact)
                     .padding(.horizontal)
 
-                    Spacer(minLength: 20)
+                // Standard meals
+                ForEach(MealType.standardCases, id: \.self) { type in
+                    MealCard(date: selectedDate, mealType: type)
+                        .padding(.horizontal)
                 }
-                .padding(.top, 12)
+
+                // Custom meals
+                ForEach(customMeals) { meal in
+                    MealCard(date: selectedDate, mealType: .custom, mealID: meal.id)
+                        .padding(.horizontal)
+                }
+
+                Button {
+                    showAddCustomMeal = true
+                } label: {
+                    Label("Add Custom Meal", systemImage: "plus.circle.fill")
+                        .font(.subheadline)
+                }
+                .buttonStyle(.bordered)
+                .padding(.horizontal)
+
+                Spacer(minLength: 20)
             }
-            .navigationTitle("Meals")
-            .navigationBarTitleDisplayMode(.large)
-            .sheet(isPresented: $showAddCustomMeal) {
-                AddCustomMealSheet(date: selectedDate)
-            }
+            .padding(.top, 12)
+        }
+        .navigationTitle("Meals")
+        .navigationBarTitleDisplayMode(.large)
+        .sheet(isPresented: $showAddCustomMeal) {
+            AddCustomMealSheet(date: selectedDate)
         }
     }
 }
@@ -453,5 +463,7 @@ struct PhotosPickerButton: View {
 }
 
 #Preview {
-    MealView()
+    NavigationStack {
+        MealView(selectedDate: .constant(Calendar.current.startOfDay(for: Date())))
+    }
 }
