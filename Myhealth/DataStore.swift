@@ -9,6 +9,7 @@ class DataStore: ObservableObject {
     private enum Key {
         static let meals = "meals_v1"
         static let weights = "weights_v1"
+        static let plannerItems = "planner_items_v1"
         static let energies = "energies_v1"
         static let reports = "reports_v1"
         static let modelConfigs = "ai_model_configs_v1"
@@ -20,6 +21,7 @@ class DataStore: ObservableObject {
 
     @Published var meals: [MealRecord] = []
     @Published var weights: [WeightRecord] = []
+    @Published var plannerItems: [PlannerItem] = []
     @Published var energies: [DailyEnergy] = []
     @Published var reports: [Report] = []
     @Published var modelConfigs: [AIModelConfig] = []
@@ -48,9 +50,11 @@ class DataStore: ObservableObject {
     private func load() {
         meals = decode([MealRecord].self, key: Key.meals) ?? []
         weights = decode([WeightRecord].self, key: Key.weights) ?? []
+        plannerItems = decode([PlannerItem].self, key: Key.plannerItems) ?? []
         energies = decode([DailyEnergy].self, key: Key.energies) ?? []
         reports = decode([Report].self, key: Key.reports) ?? []
         modelConfigs = decode([AIModelConfig].self, key: Key.modelConfigs) ?? []
+        sortPlannerItems()
 
         // Migrate legacy Anthropic API key on first launch
         if modelConfigs.isEmpty {
@@ -117,6 +121,29 @@ class DataStore: ObservableObject {
         return weights.last { $0.dateKey == key }
     }
 
+    // MARK: - Planner
+
+    func upsertPlannerItem(_ item: PlannerItem) {
+        if let idx = plannerItems.firstIndex(where: { $0.id == item.id }) {
+            plannerItems[idx] = item
+        } else {
+            plannerItems.append(item)
+        }
+        persistPlannerItems()
+    }
+
+    func deletePlannerItem(id: UUID) {
+        plannerItems.removeAll { $0.id == id }
+        save(plannerItems, key: Key.plannerItems)
+    }
+
+    func togglePlannerItemCompletion(id: UUID) {
+        guard let idx = plannerItems.firstIndex(where: { $0.id == id }) else { return }
+        plannerItems[idx].isCompleted.toggle()
+        plannerItems[idx].completedAt = plannerItems[idx].isCompleted ? Date() : nil
+        persistPlannerItems()
+    }
+
     // MARK: - Energy (cache from HealthKit)
 
     func upsertEnergy(_ energy: DailyEnergy) {
@@ -170,5 +197,22 @@ class DataStore: ObservableObject {
     private func decode<T: Decodable>(_ type: T.Type, key: String) -> T? {
         guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
+    }
+
+    private func persistPlannerItems() {
+        sortPlannerItems()
+        save(plannerItems, key: Key.plannerItems)
+    }
+
+    private func sortPlannerItems() {
+        plannerItems.sort { lhs, rhs in
+            if lhs.isCompleted != rhs.isCompleted {
+                return !lhs.isCompleted && rhs.isCompleted
+            }
+            if lhs.deadline != rhs.deadline {
+                return lhs.deadline < rhs.deadline
+            }
+            return lhs.createdAt < rhs.createdAt
+        }
     }
 }

@@ -15,6 +15,11 @@ struct ContentView: View {
                     Label("History", systemImage: "chart.bar.fill")
                 }
 
+            PlannerView()
+                .tabItem {
+                    Label("Planner", systemImage: "checklist")
+                }
+
             ReportView()
                 .tabItem {
                     Label("Reports", systemImage: "doc.text.fill")

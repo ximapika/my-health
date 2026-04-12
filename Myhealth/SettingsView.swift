@@ -78,6 +78,13 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                     HStack {
+                        Image(systemName: "checklist")
+                        Text("Planner items")
+                        Spacer()
+                        Text("\(store.plannerItems.count)")
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
                         Image(systemName: "doc.text")
                         Text("Reports saved")
                         Spacer()

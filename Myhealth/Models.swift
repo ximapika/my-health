@@ -50,6 +50,17 @@ struct WeightRecord: Identifiable, Codable {
     }
 }
 
+// MARK: - Planner
+
+struct PlannerItem: Identifiable, Codable {
+    var id: UUID = UUID()
+    var title: String
+    var deadline: Date
+    var createdAt: Date = Date()
+    var isCompleted: Bool = false
+    var completedAt: Date? = nil
+}
+
 // MARK: - Daily Energy (from HealthKit)
 
 struct DailyEnergy: Codable {
